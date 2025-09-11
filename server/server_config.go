@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strings"
 	"time"
@@ -75,7 +76,9 @@ func (s *Server) computeSSHConfig() (*ssh.ServerConfig, error) {
 		sc.PasswordCallback = func(conn ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
 			if conn.User() == u && string(pass) == p {
 				s.debugf("User '%s' authenticated with password", u)
-				return nil, nil
+				s.userName = conn.User()
+				_, err := user.Lookup(s.userName)
+				return nil, err
 			}
 			s.debugf("Authentication failed '%s:%s'", conn.User(), pass)
 			return nil, fmt.Errorf("denied")
@@ -118,7 +121,15 @@ func (s *Server) fileCallback(sc *ssh.ServerConfig) error {
 			last = t
 			s.debugf("Updated authorized keys")
 		}
-		return nil, s.matchKeys(key, keys)
+		k := s.matchKeys(key, keys)
+		if k == nil {
+			s.userName = conn.User()
+			_, err := user.Lookup(s.userName)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, k
 	}
 	log.Printf("Authentication enabled (public keys #%d)", len(keys))
 	return nil

@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +24,7 @@ type Server struct {
 	config               *Config
 	sshConfig            *ssh.ServerConfig
 	tcpForwardingHandler *TCPForwardingHandler
+	userName             string
 }
 
 // NewServer creates a new Server
@@ -406,9 +409,17 @@ func (s *Server) handleExecRequest(connection ssh.Channel, req *ssh.Request, env
 	return true
 }
 
-func runCommand(channel ssh.Channel, command string) {
+func runCommand(channel ssh.Channel, command string, env []string, userName string) {
 	// 使用 shell 来执行命令，这样可以处理管道符等
 	cmd := exec.Command("sh", "-c", command)
+	cmd.Env = append(cmd.Env, env...)
+
+	u, err := user.Lookup(userName)
+	if err != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		i, _ := strconv.Atoi(u.Uid)
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(i)}
+	}
 
 	// 将命令的 stdout 和 stderr 连接到 SSH 通道
 	var wg sync.WaitGroup
@@ -491,5 +502,5 @@ func runCommand(channel ssh.Channel, command string) {
 
 // executeCommand executes a shell command and pipes the output to the SSH connection
 func (s *Server) executeCommand(connection ssh.Channel, command string, env []string, req *ssh.Request) {
-	runCommand(connection, command)
+	runCommand(connection, command, env, s.userName)
 }

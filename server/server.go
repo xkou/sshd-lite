@@ -415,9 +415,10 @@ func runCommand(channel ssh.Channel, command string, env []string, userName stri
 	cmd.Env = append(cmd.Env, env...)
 
 	u, err := user.Lookup(userName)
-	if err != nil {
+	if err == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 		i, _ := strconv.Atoi(u.Uid)
+		cmd.Dir = u.HomeDir
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(i)}
 	}
 
